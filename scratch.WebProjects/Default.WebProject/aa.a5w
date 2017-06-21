@@ -1,0 +1,434 @@
+<%a5
+
+''VARS
+dim url  as c
+dim body as c
+dim cc   as c = ""
+dim resp as p
+dim e_itm as c = ""
+dim e_lst as c = ""
+dim cart_ttl as n
+dim e_pmt as c = ""
+dim e_tobuyer as c = ""
+dim e_licdoc as c = ""
+
+dim cn as sql::Connection
+dim rs as sql::ResultSet
+dim args as sql::Arguments
+cn.open("::name::conn")
+
+save_to_file(now() + "|" + crlf(),"c:\pmt_x.txt")
+
+'==ENSURE THIS IS A VALID POST
+if variable_exists("request.variables.TXN_ID") = .f.
+	'==CANNOT FIND EXPECTED TRANSACTION ID VAR
+	goto endofscript
+	end
+end if
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'' ABORT IF REPEAT TRANSACTION ''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+if sql_lookup(cn,"transactions","txn_id='"+pr.txn_id+"'","txn_id") = .t.
+	goto endofscript
+	END
+end if
+
+'==GET RESPONSE FROM PAYPAL
+cc = request.body
+save_to_file(now() + "|" + crlf() + stritran(cc,"&",crlf()+"&") + crlf() + "------------------------------" + crlf(),"c:\pmt_cc.txt",.t.)
+
+'==APPEND CMD TO STRING
+cc = cc + "&cmd=_notify-validate" ' append "cmd" per PayPal requirements
+
+'==REPLY TO PAYPAL. SEND EXACTLY WHAT WAS RECEIVED ABOVE
+'==SET REPLY URL
+
+if sql_lookup(cn,"paypal_setup","","is_sandbox") = .t.
+	url = sql_lookup(cn,"paypal_setup","","Paypalsandbox_url")
+else
+	url = sql_lookup(cn,"paypal_setup","","Paypal_url")
+end if
+
+dim pf as p
+dim pf.host as c = a5_split_url(url).server
+dim pf.page as c = a5_split_url(url).page
+dim pf.port as n = 443
+dim pf.method as c = "post"
+dim pf.ssl_on as l = .t.
+dim pf.body as c = cc
+resp = http_fetch(pf)
+
+'==GET SUCCESS/FAIL AND PROCESS
+dim pmtverified as l = .f.
+IF resp.parsed_headers.status_code = 200
+	if resp.body = "VERIFIED"
+		pmtverified=.t.
+	else
+		if sql_lookup(cn,"paypal_setup","","Ignore_invalid") = .t.
+			pmtverified=.t.
+		END IF
+	END IF
+END IF
+
+save_to_file(now() + "|" + resp.body + crlf(),"c:\resp.txt",.t.)
+
+''PARSE RECVD INFORMATION
+cc = urldecode(cc)
+dim pr as p
+dim pr.PAYMENT_TYPE as c 	= if(variable_exists("request.variables.PAYMENT_TYPE"),	request.variables.PAYMENT_TYPE,"")
+dim pr.PAYMENT_DATE as c 	= if(variable_exists("request.variables.PAYMENT_DATE"),	request.variables.PAYMENT_DATE,"")
+dim pr.PAYER_STATUS as c 	= if(variable_exists("request.variables.PAYER_STATUS"),	request.variables.PAYER_STATUS,"")
+dim pr.PAYER_FNAME as c 	= if(variable_exists("request.variables.FIRST_NAME"),	request.variables.FIRST_NAME,"")
+dim pr.PAYER_LNAME as c 	= if(variable_exists("request.variables.LAST_NAME"),	request.variables.LAST_NAME,"")
+dim pr.PAYER_EMAIL as c 	= if(variable_exists("request.variables.PAYER_EMAIL"),	request.variables.PAYER_EMAIL,"")
+dim pr.PAYER_ID as c 		= if(variable_exists("request.variables.PAYER_ID"),		request.variables.PAYER_ID,"")
+dim pr.ADDRESS_COUNTRY as c = if(variable_exists("request.variables.ADDRESS_COUNTRY"),request.variables.ADDRESS_COUNTRY,"")
+dim pr.ADDRESS_ZIP as c 	= if(variable_exists("request.variables.ADDRESS_ZIP"),	request.variables.ADDRESS_ZIP,"")
+dim pr.ADDRESS_STATE as c 	= if(variable_exists("request.variables.ADDRESS_STATE"),request.variables.ADDRESS_STATE,"")
+dim pr.ADDRESS_CITY as c 	= if(variable_exists("request.variables.ADDRESS_CITY"),	request.variables.ADDRESS_CITY,"")
+dim pr.ADDRESS_STREET as c 	= if(variable_exists("request.variables.ADDRESS_STREET"),request.variables.ADDRESS_STREET,"")
+pr.address_street 			= stritran(pr.address_street,crlf(),", ")
+dim pr.ITEM_TITLE as c 		= if(variable_exists("request.variables.ITEM_TITLE"),	request.variables.ITEM_TITLE,"")
+dim pr.ITEM_CODE as c 		= if(variable_exists("request.variables.ITEM_CODE"),	request.variables.ITEM_CODE,"")
+dim pr.QTY as c 			= if(variable_exists("request.variables.QTY"),			request.variables.QTY,"")
+dim pr.SHIPPING as c 		= if(variable_exists("request.variables.SHIPPING"),		request.variables.SHIPPING,"")
+dim pr.TAX as c 			= if(variable_exists("request.variables.TAX"),			request.variables.TAX,"")
+dim pr.MC_CURRENCY as c 	= if(variable_exists("request.variables.MC_CURRENCY"),	request.variables.MC_CURRENCY,"")
+dim pr.MC_FEE as c 			= if(variable_exists("request.variables.MC_FEE"),		request.variables.MC_FEE,"")
+dim pr.MC_GROSS as c 		= if(variable_exists("request.variables.MC_GROSS"),		request.variables.MC_GROSS,"")
+dim pr.MC_GROSS_1 as c 		= if(variable_exists("request.variables.MC_GROSS_1"),	request.variables.MC_GROSS_1,"")
+dim pr.TXN_TYPE as c		= if(variable_exists("request.variables.TXN_TYPE"),		request.variables.TXN_TYPE,"")
+dim pr.TXN_ID as c 			= if(variable_exists("request.variables.TXN_ID"),		alltrim(request.variables.TXN_ID),"")
+dim pr.receiver_email as c	= if(variable_exists("request.variables.receiver_email"),request.variables.receiver_email,"")
+dim pr.memo as c			= if(variable_exists("request.variables.memo"),			request.variables.memo,"")
+dim pr.payment_status as c  = if(variable_exists("request.variables.payment_status"),request.variables.payment_status,"")
+dim pr.test_txn as c		= if(variable_exists("request.variables.test_ipn"),		request.variables.test_ipn,"")
+
+dim pr.custom as c 			= if(variable_exists("request.variables.custom"),		request.variables.custom,"")
+dim pr.cartid as C			= extract_string(request.variables.custom,"cartid=","|")
+dim pr.ulink as C			= extract_string(request.variables.custom,"ulink=","|")
+
+save_to_file(pr.custom + crlf() + pr.cartid + crlf(),"c:\a5\pr.txt")
+
+if pr.test_txn = "1"
+	pmtverified = .t.
+end if
+
+IF pmtverified = .f.
+	end
+end if
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'' BUILD EMAIL HEADER '''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+vsql = "SELECT * FROM wt_email WHERE template = 'payment_success'"
+if cn.execute(vsql) = .f.
+	errorout("PPRESP_SELECT_WTEMAIL|"+cn.callresult.text)
+end if
+
+e_bcc  = cn.resultset.data("Bcc")
+e_subj = cn.resultset.data("Subject")
+e_hdr  = if(val(pr.test_txn)=1,"----TEST TRANSACTION----" + crlf(2),"") + cn.resultset.data("Body")
+e_prof = alltrim(cn.resultset.data("profile"))
+
+e_subj = stritran(e_subj, "***fullname***",alltrim(pr.PAYER_FNAME) + " " + alltrim(pr.PAYER_LNAME))
+e_subj = stritran(e_subj,"***firstname***",alltrim(pr.PAYER_FNAME))
+e_subj = stritran(e_subj,"***app_name***",wt_setup("App_name"))
+
+e_hdr = stritran(e_hdr,"***fullname***",alltrim(pr.PAYER_FNAME) + " " + alltrim(pr.PAYER_LNAME))
+e_hdr = stritran(e_hdr,"***firstname***",alltrim(pr.PAYER_FNAME))
+e_hdr = stritran(e_hdr,"***app_name***",wt_setup("App_name"))
+e_hdr = stritran(e_hdr,"***app_url***", wt_setup("App_url"))
+
+e_hdr = e_hdr + if(val(pr.test_txn)=1,"----TEST TRANSACTION - TEST TRANSACTION----","") + crlf(2)
+e_hdr = e_hdr + "***********************************************" + crlf()
+e_hdr = e_hdr + "*** ORDER INFORMATION *************************" + crlf()
+e_hdr = e_hdr + "***********************************************" + crlf(2)
+e_hdr = e_hdr + "Sold to........: " + pr.PAYER_FNAME + " " + pr.PAYER_LNAME + crlf()
+e_hdr = e_hdr + "Email..........: " + alltrim(pr.PAYER_EMAIL) + crlf()
+e_hdr = e_hdr + "Transaction#...: " + alltrim(pr.TXN_ID) + crlf()
+
+vsql = "SELECT SUM (extension) as ttlOrder FROM cart WHERE cartid = :cartid"
+args.add("cartid",pr.cartid)
+if cn.execute(vsql) = .f.
+	errorout("PPRESP_SELECTSUM|"+cn.callresult.text)
+end if
+ttlOrder = cn.resultset.data("ttlOrder")
+vsql = "SELECT COUNT (*) as ttlItems FROM cart WHERE cartid = :cartid"
+args.add("cartid",pr.cartid)
+if cn.execute(vsql) = .f.
+	errorout("PPRESP_SELECTCNT|"+cn.callresult.text)
+end if
+ttlItems = cn.resultset.data("ttlItems")
+
+e_hdr = e_hdr + "Total Order....: " + alltrim(str(ttlOrder,12,2,"$(")) + crlf()
+e_hdr = e_hdr + "Total items....: " + alltrim(str(ttlItems,12,0)) + crlf()
+e_hdr = e_hdr + "Method ........: PayPal" + crlf()
+
+if pr.memo<>""
+	e_hdr = e_hdr + "Your comments on PayPal ...: " + pr.memo + crlf()
+end if
+
+e_hdr = e_hdr + crlf()
+
+e_hdr = e_hdr + "***********************************************" + crlf()
+e_hdr = e_hdr + "*** YOUR ITEMS ARE LISTED BELOW ***************" + crlf()
+e_hdr = e_hdr + "***********************************************" + crlf(2)
+
+SELECT
+	
+	CASE pr.txn_type = "cart"
+		
+		'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+		'' TXN_TYPE = CART ''''''''''''''''''''''''''''''''''''''''''''''''''''''
+		'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+		
+		''GET LIST OF ITEMS
+		dim cart_arr[0] as p
+		vsql = "SELECT * FROM cart WHERE id = :cartid"
+		args.add("cartid",pr.cartid)
+		cn.execute(vsql,args)
+		rs = cn.resultset
+		rs.toPropertyArray(cart_arr)
+		
+		save_to_file(pr.cartid,"c:\a5\cartid.txt")
+		
+		vsql = "DELETE FROM cart WHERE id = :cartid"
+		args.add("cartid",pr.cartid)
+		if cn.execute(vsql,args) = .f.
+			errorout("PPRESP_DELETE_CART|"+cn.callresult.text)
+		end if
+		
+		FOR x = 1 to cart_arr.size()
+			
+			dim e_itm as c = ""
+			cart_ttl = cart_ttl + cart_arr[x].extension
+			seller_id    = sql_lookup(cn,"products","item_no = '"+ cart_arr[x].item_no +"'","vendor_id")
+			seller_email = sql_lookup(cn,"vendor","id='"+seller_id+"'","email_address")
+			seller_name  = sql_lookup(cn,"vendor","id='"+seller_id+"'","name")
+			seller_key   = sql_lookup(cn,"vendor","id='"+seller_id+"'","email_receipt_key")
+			dim lictemp as c = ""
+			
+			e_itm = e_itm + "ITEM#" + x + " ........: " + cart_arr[x].ITEM_NO +"-"+ cart_arr[x].item + crlf(2)
+			e_itm = e_itm + "Amount paid....: " + alltrim(str(cart_arr[x].extension,10,2,"$(")) + crlf()
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' BUILD EMAIL MSG FOR PRODUCT ''''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' APPLY LICENSE IF APPLICABLE ''''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			IF sql_lookup(cn,"products","item_no='"+cart_arr[x].item_no+"'","Apply_Atg_License") = .t.
+				lictemp = str(*crc(time("yMMdd0h0m0s3")))
+				lictemp = stritran(lictemp,"8","B")
+				lictemp = stritran(lictemp,"9","C")
+				lictemp = stritran(lictemp,"3","F")
+				lictemp = stritran(lictemp,"0","T")
+				lictemp = stritran(lictemp,"1","A")
+				e_itm = e_itm + "License#.......: " + lictemp + crlf()
+				'
+				if sql_lookup(cn,"products","item_no='"+cart_arr[x].item_no+"'","Dl_From_Atg_Server") = .t.
+					e_itm = e_itm + "Download.......: " + wt_setup("App_url") + "/getproduct.a5w?id=" + sql_lookup(cn,"products","item_no='"+cart_arr[x].id+"'","id")
+				else
+					vdl = sql_lookup(cn,"products","item_no='"+cart_arr[x].item_no+"'","Dl_filename")
+					if vdl <> ""
+						e_itm = e_itm + "Download.......: " + vdl + crlf(2)
+					end if
+				END IF
+			END IF
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' GET VALUES FOR MAIL MERGE ''''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			buyer_email		= alltrim(pr.PAYER_EMAIL)
+			buyer_fullname 	= alltrim(pr.PAYER_FNAME) + " " + alltrim(pr.PAYER_LNAME)
+			Order_Date 		= date()
+			item_description= cart_arr[x].item
+			Order_DateTime	= time("x \d\a\y of Month, yyyy",now())
+			Order_Amt		= alltrim(str(cart_arr[x].extension,10,2,"$("))
+			item_License	= lictemp
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' WRITE TRANS RECORD ' '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' IMPORTANT - WRITE LOG BEFORE EMAIL SO TRANS IS LOGGED BEFORE PAYPAL SECOND POST ''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			vsql = <<%txt%
+			INSERT INTO transactions 			
+			(
+			ulink,
+			Timestamp,
+			txn_id,
+			payment_status,
+			buyer_name,
+			buyer_email,
+			buyer_address,
+			buyer_city,
+			buyer_state,
+			buyer_zip,
+			affiliate_id,
+			item_no,
+			item,
+			item_id,
+			qty,
+			price,
+			extension,
+			seller_id,
+			license,
+			testonly,
+			ID
+			)
+			VALUES
+			(
+			:ulink,
+			:Timestamp,
+			:txn_id,
+			:payment_status,
+			:buyer_name,
+			:buyer_email,
+			:buyer_address,
+			:buyer_city,
+			:buyer_state,
+			:buyer_zip,
+			:affiliate_id,
+			:item_no,
+			:item,
+			:item_id,
+			:qty,
+			:price,
+			:extension,
+			:seller_id,
+			:license,
+			:testonly,
+			:ID
+			)
+			%txt%
+			
+			args.add("ulink",			pr.ulink )
+			args.add("Timestamp",		now() )
+			args.add("txn_id",			pr.TXN_ID )
+			args.add("payment_status",pr.payment_status )
+			args.add("buyer_name",		pr.PAYER_FNAME + " " + pr.PAYER_LNAME )
+			args.add("buyer_email",	pr.PAYER_EMAIL )
+			args.add("buyer_address",	pr.address_street )
+			args.add("buyer_city",		pr.address_city )
+			args.add("buyer_state",	pr.address_state )
+			args.add("buyer_zip",		pr.address_zip )
+			args.add("affiliate_id",	cart_arr[x].affiliate_id )
+			args.add("item_no",			cart_arr[x].item_no )
+			args.add("item",			cart_arr[x].item )
+			args.add("item_id",			cart_arr[x].id )
+			args.add("qty",				cart_arr[x].qty )
+			args.add("price",			cart_arr[x].price )
+			args.add("extension",		cart_arr[x].extension )
+			args.add("seller_id",		seller_id )
+			args.add("license",			lictemp )
+			args.add("testonly",		if(pr.test_txn="1",.t.,.f.) )
+			args.add("ID",				upper(remspecial(api_uuidcreate())) )
+			
+'			if cn.execute(vsql,args) = .f.
+'				errorout("PPRESP_INSERT_TRANS"+cn.callresult.text)
+'			end if
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' ADD ANY NOTES TO BUYER '''''''''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			vnotes = sql_lookup(cn,"products","item_no='"+cart_arr[x].item_no+"'","Notetobuyer")
+			if vnotes <> ""
+				e_itm = e_itm + "Notes..........: " + evaluate_string(vnotes) + crlf(2)
+			end if
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' SEND EMAIL TO SELLER FOR INDIVIDUAL ITEM '''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			dim result1 as l
+			dim pm1 as p
+			dim ps1 as p
+			pm1.to			= seller_email
+			pm1.cc			= "steve@iadn.com"
+			pm1.subject 	= evaluate_string(if(val(pr.test_txn)=1,"----TEST----","") + "Your product sold on IADN")
+			pm1.message 	= <<%txt%
+			KEY:{seller_key}
+			ITEM:{cart_arr[x].item_no}
+			BUYERNAME:{pr.PAYER_FNAME + " " + pr.PAYER_LNAME}
+			BUYEREMAIL:{pr.PAYER_EMAIL}
+			%txt%
+			pm1.message = pm1.message + alltrim(seller_name) + "," + crlf(2) + "The following email was sent to the buyer by IADN after a legitimate sale. Please follow up with this buyer if requried." + crlf(2) + replicate("-",10) +  crlf(2) + e_hdr + e_itm
+			pm1.message = evaluate_string(pm1.message)
+'			IF pm1.to <> ""
+'				''''REA'''''
+'				return = am_queuemail("::name::conn",pm1)
+'				if return.error_msg <> ""
+'					save_to_file(return.error_msg,"c:\rea_error.txt")
+'				end if
+'			END IF
+
+
+			pm1.from = "noreply@iadn.com"
+			pm1.from_alias = "Alpha Developers Network"
+			smtp_server = "smtp.mandrillapp.com"
+			smtp_username = "steve@alphatogo.com"
+			smtp_password = "mvH_Re0WRHUr-kuxKcqotA"
+			smtp_port = 587
+
+			email_smtp_open(ps1,smtp_server,smtp_port,smtp_username,smtp_password)
+			email_smtp_send(pm1,ps1)
+			email_smtp_close(ps1)
+
+
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' END OF EMAIL, WRAP NEXT ITEM '''''''''''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			
+			e_itm = e_itm + "---------------------------------------------" + crlf(2)
+			dim seller_id as c
+			
+			e_tobuyer = e_tobuyer + e_itm
+			
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			'' LOOP TO ADD ANY LICENSE TEXT TO EMAIL ''''''''''''''''''''''''''''''''
+			'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+			vlicdocs = sql_lookup(cn,"products","item_no='"+cart_arr[x].item_no+"'","license_document")
+			if vlicdocs <> ""
+				vlicdocs = evaluate_string(vlicdocs)
+				e_licdoc = e_licdoc + "LICENSE DOCUMENT FOR: " + cart_arr[x].item + crlf() + vlicdocs + crlf() + "-----------------------" + crlf(2)
+			end if
+		next
+		
+		'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+		'' SEND EMAIL TO BUYER '''''''''''''''''''''''''''''''''''''''''''''''''
+		'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+		dim result as l
+		dim ps as p
+		dim pm as p
+		pm.to		= alltrim(pr.PAYER_EMAIL)
+		pm.to		= "steve@sqst.com"
+		'pm.bcc 		= "steve3@sqst.com"
+		pm.subject 	= if(val(pr.test_txn)=1,"----TEST----","") + "IADN Order Confirmation"
+		pm.message 	= e_hdr + e_tobuyer + e_licdoc
+
+		pm.from = "noreply@iadn.com"
+		pm.from_alias = "Alpha Developers Network"
+		smtp_server = "smtp.mandrillapp.com"
+		smtp_username = "steve@alphatogo.com"
+		smtp_password = "mvH_Re0WRHUr-kuxKcqotA"
+		smtp_port = 587
+
+		email_smtp_open(ps,smtp_server,smtp_port,smtp_username,smtp_password)
+		email_smtp_send(pm,ps)
+		email_smtp_close(ps)
+		
+		''''REA'''''
+	'	return = am_queuemail("::name::conn",pm)
+		
+	CASE else
+		
+END SELECT
+'sys_shell("C:\cron\rea_automailer.bat",1)
+endofscript:
+
+cn.close()
+
+
+%>
